@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pomodoro Timer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --accent: #e94560;
+      --accent-dim: #c73652;
+      --text: #eaeaea;
+      --muted: #888;
+      --break-color: #4ecca3;
+      --long-break-color: #f5a623;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2rem;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    /* Phase label */
+    #phase-label {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      transition: color 0.4s;
+    }
+
+    /* Circular timer */
+    .ring-container {
+      position: relative;
+      width: 260px;
+      height: 260px;
+    }
+
+    .ring-container svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .ring-bg {
+      fill: none;
+      stroke: var(--surface);
+      stroke-width: 10;
+    }
+
+    .ring-progress {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 10;
+      stroke-linecap: round;
+      stroke-dasharray: 720;
+      stroke-dashoffset: 0;
+      transition: stroke-dashoffset 1s linear, stroke 0.4s;
+    }
+
+    #timer-display {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 3.5rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Buttons */
+    .controls {
+      display: flex;
+      gap: 1rem;
+    }
+
+    button {
+      padding: 0.65rem 1.6rem;
+      border: none;
+      border-radius: 999px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+
+    button:active { transform: scale(0.96); }
+
+    #btn-start {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    #btn-start:hover { background: var(--accent-dim); }
+
+    #btn-reset {
+      background: var(--surface);
+      color: var(--muted);
+      border: 1px solid #333;
+    }
+
+    #btn-reset:hover { color: var(--text); }
+
+    /* Pomodoro count */
+    #count-badge {
+      background: var(--surface);
+      border: 1px solid #333;
+      border-radius: 999px;
+      padding: 0.5rem 1.2rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    #count-badge span {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    /* Cycle dots */
+    .cycle-dots {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #333;
+      transition: background 0.3s;
+    }
+
+    .dot.filled { background: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <h1>🍅 Pomodoro</h1>
+  <div id="phase-label">Focus</div>
+
+  <div class="ring-container">
+    <svg viewBox="0 0 260 260">
+      <circle class="ring-bg" cx="130" cy="130" r="115" />
+      <circle class="ring-progress" id="ring" cx="130" cy="130" r="115" />
+    </svg>
+    <div id="timer-display">25:00</div>
+  </div>
+
+  <div class="cycle-dots" id="cycle-dots">
+    <div class="dot" id="dot-0"></div>
+    <div class="dot" id="dot-1"></div>
+    <div class="dot" id="dot-2"></div>
+    <div class="dot" id="dot-3"></div>
+  </div>
+
+  <div class="controls">
+    <button id="btn-start">Start</button>
+    <button id="btn-reset">Reset</button>
+  </div>
+
+  <div id="count-badge">🍅 <span id="count">0</span> completed today</div>
+
+  <script>
+    const PHASES = [
+      { name: 'Focus',       duration: 25 * 60, color: '#e94560' },
+      { name: 'Short Break', duration:  5 * 60, color: '#4ecca3' },
+    ];
+    const LONG_BREAK = { name: 'Long Break', duration: 15 * 60, color: '#f5a623' };
+    const CYCLES_BEFORE_LONG = 4;
+
+    let phaseIndex = 0;   // 0 = focus, 1 = short break
+    let cycleCount = 0;   // completed focus sessions
+    let timeLeft = PHASES[0].duration;
+    let totalTime = PHASES[0].duration;
+    let running = false;
+    let interval = null;
+
+    const display  = document.getElementById('timer-display');
+    const label    = document.getElementById('phase-label');
+    const ring     = document.getElementById('ring');
+    const btnStart = document.getElementById('btn-start');
+    const btnReset = document.getElementById('btn-reset');
+    const countEl  = document.getElementById('count');
+    const dots     = [0,1,2,3].map(i => document.getElementById('dot-' + i));
+
+    const CIRCUMFERENCE = 2 * Math.PI * 115; // ~722.6
+
+    function fmt(s) {
+      const m = Math.floor(s / 60).toString().padStart(2, '0');
+      const sec = (s % 60).toString().padStart(2, '0');
+      return `${m}:${sec}`;
+    }
+
+    function updateRing() {
+      const progress = timeLeft / totalTime;
+      ring.style.strokeDasharray = CIRCUMFERENCE;
+      ring.style.strokeDashoffset = CIRCUMFERENCE * (1 - progress);
+    }
+
+    function updateDots() {
+      dots.forEach((d, i) => {
+        d.classList.toggle('filled', i < (cycleCount % CYCLES_BEFORE_LONG));
+      });
+    }
+
+    function applyPhaseStyle(phase) {
+      label.textContent = phase.name;
+      label.style.color = phase.color;
+      ring.style.stroke = phase.color;
+    }
+
+    function render() {
+      display.textContent = fmt(timeLeft);
+      updateRing();
+      updateDots();
+    }
+
+    function beep() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.8);
+      } catch(e) {}
+    }
+
+    function nextPhase() {
+      beep();
+
+      if (phaseIndex === 0) {
+        // Just finished a focus session
+        cycleCount++;
+        countEl.textContent = cycleCount;
+        updateDots();
+
+        if (cycleCount % CYCLES_BEFORE_LONG === 0) {
+          // Long break
+          applyPhaseStyle(LONG_BREAK);
+          timeLeft = LONG_BREAK.duration;
+          totalTime = LONG_BREAK.duration;
+          phaseIndex = 1; // treat long break same as short for next toggle
+        } else {
+          applyPhaseStyle(PHASES[1]);
+          timeLeft = PHASES[1].duration;
+          totalTime = PHASES[1].duration;
+          phaseIndex = 1;
+        }
+      } else {
+        // Just finished a break
+        applyPhaseStyle(PHASES[0]);
+        timeLeft = PHASES[0].duration;
+        totalTime = PHASES[0].duration;
+        phaseIndex = 0;
+      }
+
+      running = false;
+      btnStart.textContent = 'Start';
+      render();
+    }
+
+    function tick() {
+      if (timeLeft <= 0) {
+        clearInterval(interval);
+        nextPhase();
+        return;
+      }
+      timeLeft--;
+      render();
+    }
+
+    btnStart.addEventListener('click', () => {
+      if (running) {
+        clearInterval(interval);
+        running = false;
+        btnStart.textContent = 'Resume';
+      } else {
+        interval = setInterval(tick, 1000);
+        running = true;
+        btnStart.textContent = 'Pause';
+      }
+    });
+
+    btnReset.addEventListener('click', () => {
+      clearInterval(interval);
+      running = false;
+      phaseIndex = 0;
+      const phase = PHASES[0];
+      timeLeft = phase.duration;
+      totalTime = phase.duration;
+      applyPhaseStyle(phase);
+      btnStart.textContent = 'Start';
+      render();
+    });
+
+    // Init
+    applyPhaseStyle(PHASES[0]);
+    render();
+  </script>
+</body>
+</html>
